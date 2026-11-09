@@ -1,6 +1,6 @@
 {
-  "appId": "com.nikola.kitchen.home",
-  "appName": "Nikola's Kitchen+",
+  "appId": "com.nikola.kitchen.personal",
+  "appName": "Nikola's Kitchen 3",
   "webDir": "www",
   "server": {
     "androidScheme": "https"
