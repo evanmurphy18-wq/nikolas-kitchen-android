@@ -1,7 +1,7 @@
 {
-  "name": "Nikola's Kitchen+ · Whole-house food & recipes",
-  "short_name": "Nikola's Kitchen+",
-  "description": "Track freezer, fridge and pantry stock. Make meals and plan shopping.",
+  "name": "Nikola's Kitchen 3 · Personalised food inventory",
+  "short_name": "Nikola's Kitchen 3",
+  "description": "Track freezer, fridge and pantry with your own icons and units.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
