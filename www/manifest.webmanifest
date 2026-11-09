@@ -1,7 +1,7 @@
 {
-  "name": "Nikola's Kitchen · Freezer & Recipes",
-  "short_name": "Nikola's Kitchen",
-  "description": "An offline kitchen assistant for freezer meals and recipes.",
+  "name": "Nikola's Kitchen+ · Whole-house food & recipes",
+  "short_name": "Nikola's Kitchen+",
+  "description": "Track freezer, fridge and pantry stock. Make meals and plan shopping.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
