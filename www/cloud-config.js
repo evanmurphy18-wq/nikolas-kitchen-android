@@ -1,5 +1,10 @@
-// Nikola's Kitchen cloud backend.
-// The Firebase web config contains public project identifiers, never credentials.
-// Set this to the Web App config from a Firebase project to enable sharing.
-// Leave null for completely offline/local-only usage.
-window.NK_CLOUD_CONFIG = null;
+// Firebase public web app configuration for Nikola's Kitchen shared shopping.
+// Authentication and Firestore security rules must be enabled in Firebase Console.
+window.NK_CLOUD_CONFIG = {
+  "apiKey": "AIzaSyCVoLLG6qFbaiEvGaCRz-FRFh3UlTV_vvo",
+  "authDomain": "nikolas-kitchen.firebaseapp.com",
+  "projectId": "nikolas-kitchen",
+  "storageBucket": "nikolas-kitchen.firebasestorage.app",
+  "messagingSenderId": "1067590940209",
+  "appId": "1:1067590940209:web:0b207a583e090662134710"
+};
