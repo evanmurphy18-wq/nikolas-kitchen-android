@@ -352,7 +352,21 @@
   let state=loadState();
   syncCreations();
   let tab='home',recipeCat='All',recipeQuery='',locationFilter='All',zoneFilter='All',freezerQuery='',showOut=false,onlySoon=false,genMains='any',genMood='any',genTime='any',generatedIds=null;
-  function save(){try{localStorage.setItem(KEY,JSON.stringify(state));}catch(e){toast('Storage unavailable: export your data before closing.');}}
+  // Inventory is an opt-in household resource. Personal recipes, plans, and
+  // shopping settings remain local to the phone.
+  function inventoryCopy(){return {
+    stock:{...state.stock},
+    custom:JSON.parse(JSON.stringify(state.custom||[])),
+    meta:JSON.parse(JSON.stringify(state.meta||{}))
+  };}
+  let lastInventory=inventoryCopy();
+  function save(){
+    const oldInventory=lastInventory, nextInventory=inventoryCopy();
+    const inventoryChanged=JSON.stringify(oldInventory)!==JSON.stringify(nextInventory);
+    try{localStorage.setItem(KEY,JSON.stringify(state));}catch(e){toast('Storage unavailable: export your data before closing.');}
+    lastInventory=nextInventory;
+    if(inventoryChanged)window.NKCloud?.inventoryChanged?.(oldInventory,nextInventory);
+  }
   function esc(s){return String(s??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));}
   function items(){return [...BASE_ITEMS,...state.custom].map(i=>({...i,location:locationOf(i),qty:Math.max(0,Number(state.stock[i.id]??i.qty)||0)}));}
   function item(id){return items().find(x=>x.id===id);}
@@ -530,7 +544,7 @@
     state.stock[id]=Math.round(qty*10000)/10000;save();closeModal();render();toast('Food and icon saved ✓');
   }
   function deleteItem(id){if(!confirm('Remove this custom ingredient permanently?'))return;state.custom=state.custom.filter(x=>x.id!==id);delete state.stock[id];save();closeModal();render();toast('Ingredient removed');}
-  function openManage(){showModal(`<div class="eyebrow">YOUR KITCHEN, YOUR DATA</div><h2>Household, updates & backup</h2><p>Your fridge, freezer, pantry and recipes remain on this phone. You can opt in to securely sharing just the shopping list with your household.</p><div class="settings-grid"><button class="manage-btn" onclick="openHousehold()"><span>☁️</span>Shared household</button><button class="manage-btn" onclick="checkAppUpdates()"><span>🔄</span>Check for updates</button><button class="manage-btn" onclick="openShopping()"><span>🛒</span>Shopping list</button><button class="manage-btn" onclick="exportData()"><span>📤</span>Export backup</button><button class="manage-btn" onclick="document.getElementById('import-input').click()"><span>📥</span>Import backup file</button><button class="manage-btn" onclick="showPasteBackup()"><span>📝</span>Paste backup text</button><button class="manage-btn" onclick="showCopyBackup()"><span>📋</span>Copy backup text</button></div><h3>Moving to a new phone</h3><p>Transfer the JSON file (or copy the backup text) then import it. Backups from the first freezer-only version are supported, too.</p><div class="rule"></div><h3>Starting over</h3><button class="btn outline full" onclick="resetData()">Restore original freezer and empty pantry</button><p class="foot-note">Resetting clears your changes and favourites. Export first.</p>`);}
+  function openManage(){showModal(`<div class="eyebrow">YOUR KITCHEN, YOUR DATA</div><h2>Household, updates & backup</h2><p>Your fridge, freezer and pantry can be shared with your household after you import your food. Recipes, favourites and meal plans stay on this phone.</p><div class="settings-grid"><button class="manage-btn" onclick="openHousehold()"><span>☁️</span>Shared household</button><button class="manage-btn" onclick="checkAppUpdates()"><span>🔄</span>Check for updates</button><button class="manage-btn" onclick="openShopping()"><span>🛒</span>Shopping list</button><button class="manage-btn" onclick="exportData()"><span>📤</span>Export backup</button><button class="manage-btn" onclick="document.getElementById('import-input').click()"><span>📥</span>Import backup file</button><button class="manage-btn" onclick="showPasteBackup()"><span>📝</span>Paste backup text</button><button class="manage-btn" onclick="showCopyBackup()"><span>📋</span>Copy backup text</button></div><h3>Moving to a new phone</h3><p>Transfer the JSON file (or copy the backup text) then import it. Backups from the first freezer-only version are supported, too.</p><div class="rule"></div><h3>Starting over</h3><button class="btn outline full" onclick="resetData()">Restore original freezer and empty pantry</button><p class="foot-note">Resetting clears your changes and favourites. Export first.</p>`);}
   function exportData(){const blob=new Blob([JSON.stringify({app:'NikolasKitchen',version:3,exportedAt:new Date().toISOString(),data:state},null,2)],{type:'application/json'});const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='nikolas-kitchen-backup-'+new Date().toISOString().slice(0,10)+'.json';document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),2500);toast('Backup prepared ✓');}
   function showCopyBackup(){const raw=JSON.stringify({app:'NikolasKitchen',version:3,data:state});showModal(`<div class="eyebrow">PORTABLE BACKUP</div><h2>Copy your kitchen data</h2><p>Select all and copy this text if downloading files does not work on your phone.</p><textarea id="backup-text" class="backup-text" readonly>${esc(raw)}</textarea><button class="btn full" onclick="copyBackup()">📋 Select & copy backup</button><p class="foot-note">Keep this somewhere private; it contains your entire kitchen inventory.</p>`);}
   function copyBackup(){const t=document.getElementById('backup-text');if(!t)return;t.focus();t.select();t.setSelectionRange(0,t.value.length);try{const ok=document.execCommand('copy');toast(ok?'Copied to clipboard ✓':'Text selected — use Copy');}catch(e){toast('Text selected — use Copy');}}
@@ -564,9 +578,26 @@
   function resetMeta(){for(const i of BASE_ITEMS)Object.assign(i,ORIGINAL_META[i.id]);}
   function applyMeta(){resetMeta();if(!state.meta)return;for(const i of BASE_ITEMS){const m=state.meta[i.id];if(m&&typeof m==='object'){if(typeof m.name==='string'&&m.name.length<100)i.name=m.name;if(typeof m.unit==='string')i.unit=m.unit;if(LOCATIONS.includes(m.location))i.location=m.location;const loc=locationOf(i);if(zoneOptions(loc).includes(m.zone))i.zone=m.zone;if(typeof m.note==='string')i.note=m.note;if(typeof m.bestBefore==='string')i.bestBefore=m.bestBefore;if(typeof m.emoji==='string'&&Array.from(m.emoji).length<=12)i.emoji=m.emoji;if(Number.isFinite(m.step)&&m.step>0)i.step=m.step;i.recipeEquiv=Number.isFinite(m.recipeEquiv)&&m.recipeEquiv>0?m.recipeEquiv:null;}}}
   applyMeta();render();
-  window.NKHost={getShopping:()=>[...(state.shopping||[])],setShopping:(entries)=>{state.shopping=entries.slice(0,250);save();if(window.NK_SHOPPING_OPEN)openShopping();}};
+  window.NKHost={
+    getShopping:()=>[...(state.shopping||[])],
+    setShopping:(entries)=>{state.shopping=entries.slice(0,250);save();if(window.NK_SHOPPING_OPEN)openShopping();},
+    getInventory:()=>inventoryCopy(),
+    setInventory:(shared)=>{
+      if(!shared||typeof shared.stock!=='object'||!Array.isArray(shared.custom)||typeof shared.meta!=='object')return;
+      const safeStock={};
+      for(const [id,q] of Object.entries(shared.stock)){
+        if(typeof id==='string'&&id.length<150&&typeof q==='number'&&Number.isFinite(q)&&q>=0&&q<=100000)safeStock[id]=q;
+      }
+      state.stock=safeStock;
+      state.custom=shared.custom.filter(x=>x&&typeof x.id==='string'&&x.id.startsWith('custom_')&&typeof x.name==='string'&&typeof x.unit==='string').slice(0,500);
+      state.meta=shared.meta;
+      applyMeta();
+      lastInventory=inventoryCopy(); // Remote changes must not be uploaded again.
+      save();render();
+    }
+  };
   function openHousehold(){if(!window.NKCloud){toast('Cloud settings are loading.');return;}window.NKCloud.open();}
-  async function checkAppUpdates(){showModal(`<div class="eyebrow">NIKOLA'S KITCHEN</div><h2>App updates</h2><p>Checking GitHub for a newer signed Android release…</p>`);try{const r=await fetch('https://api.github.com/repos/evanmurphy18-wq/nikolas-kitchen-android/releases/latest',{cache:'no-store'});if(!r.ok)throw Error(r.status===404?'No published Android release yet.':'GitHub is unavailable.');const d=await r.json(),apk=(d.assets||[]).find(a=>a.name.endsWith('.apk'));const ver=String(d.tag_name||'').replace(/^v/,'');const newer=ver.localeCompare('4.1.0',undefined,{numeric:true})>0;showModal(`<div class="eyebrow">NIKOLA'S KITCHEN</div><h2>${newer?'Update available':'App updates'}</h2><p>${esc(d.name||d.tag_name)} · ${newer?'A newer version is available.':'This is the current major version.'}</p><p>Android will ask you to approve any APK installation. Existing data is preserved only when the update uses the same app ID and signing key.</p>${apk?`<button class="btn full" onclick="openReleaseUrl('${esc(apk.browser_download_url)}')">Get APK ${icon('arrow')}</button>`:''}`);}catch(e){showModal(`<h2>App updates</h2><p>${esc(e.message||'Unable to check for updates.')}</p><button class="btn outline full" onclick="openReleaseUrl('https://github.com/evanmurphy18-wq/nikolas-kitchen-android/releases')">View releases</button>`);}}
+  async function checkAppUpdates(){showModal(`<div class="eyebrow">NIKOLA'S KITCHEN</div><h2>App updates</h2><p>Checking GitHub for a newer signed Android release…</p>`);try{const r=await fetch('https://api.github.com/repos/evanmurphy18-wq/nikolas-kitchen-android/releases/latest',{cache:'no-store'});if(!r.ok)throw Error(r.status===404?'No published Android release yet.':'GitHub is unavailable.');const d=await r.json(),apk=(d.assets||[]).find(a=>a.name.endsWith('.apk'));const ver=String(d.tag_name||'').replace(/^v/,'');const newer=ver.localeCompare('4.2.0',undefined,{numeric:true})>0;showModal(`<div class="eyebrow">NIKOLA'S KITCHEN</div><h2>${newer?'Update available':'App updates'}</h2><p>${esc(d.name||d.tag_name)} · ${newer?'A newer version is available.':'This is the current major version.'}</p><p>Android will ask you to approve any APK installation. Existing data is preserved only when the update uses the same app ID and signing key.</p>${apk?`<button class="btn full" onclick="openReleaseUrl('${esc(apk.browser_download_url)}')">Get APK ${icon('arrow')}</button>`:''}`);}catch(e){showModal(`<h2>App updates</h2><p>${esc(e.message||'Unable to check for updates.')}</p><button class="btn outline full" onclick="openReleaseUrl('https://github.com/evanmurphy18-wq/nikolas-kitchen-android/releases')">View releases</button>`);}}
   function openReleaseUrl(url){if(!/^https:\/\/github\.com\//.test(url))return;window.open(url,'_blank','noopener,noreferrer');}
   if('serviceWorker' in navigator && location.protocol.startsWith('http')){window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(()=>{}));}
   </script>
