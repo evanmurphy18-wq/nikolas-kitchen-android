@@ -33,6 +33,36 @@ service cloud.firestore {
             || request.resource.data.joinKey == get(/databases/$(database)/documents/households/$(hid)).data.inviteKey);
         allow update, delete: if false;
       }
+      // Stock sharing is opt-in. The owner first publishes an inventory
+      // snapshot, then switches on the household inventory setting.
+      match /settings/{settingId} {
+        allow get: if member(hid) && settingId == 'inventory';
+        allow list: if false;
+        allow create: if member(hid) && settingId == 'inventory'
+          && get(/databases/$(database)/documents/households/$(hid)).data.ownerUid == request.auth.uid
+          && request.resource.data.keys().hasOnly(['enabled','ownerUid','startedAt'])
+          && request.resource.data.enabled == true
+          && request.resource.data.ownerUid == request.auth.uid;
+        allow update, delete: if false;
+      }
+      match /inventory/{itemId} {
+        allow read: if member(hid);
+        allow create, update: if member(hid)
+          && itemId.size() <= 140
+          && request.resource.data.keys().hasOnly(['qty','custom','meta','updatedBy','updatedAt'])
+          && request.resource.data.qty is number
+          && request.resource.data.qty >= 0
+          && request.resource.data.qty <= 100000
+          && request.resource.data.updatedBy == request.auth.uid
+          && (!('custom' in request.resource.data)
+              || request.resource.data.custom == null
+              || (request.resource.data.custom is map
+                  && request.resource.data.custom.get('id','') == itemId))
+          && (!('meta' in request.resource.data)
+              || request.resource.data.meta == null
+              || request.resource.data.meta is map);
+        allow delete: if member(hid) && itemId.matches('custom_.*');
+      }
       match /shopping/{itemId} {
         allow read: if member(hid);
         allow create: if member(hid)
