@@ -1,61 +1,106 @@
-name: Build Nikola's Kitchen APK
+name: Build Nikola's Kitchen Android
 
 on:
   push:
     branches: [main]
+    tags: ['v*']
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  build-apk:
-    name: Android debug APK
+  android:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
+    env:
+      NK_SIGNING_PASSWORD: ${{ secrets.NK_SIGNING_PASSWORD }}
     steps:
-      - name: Check out app
-        uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: '22'
-
-      - name: Set up Java
-        uses: actions/setup-java@v4
+      - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '21'
 
-      # GitHub's Ubuntu runner already includes the Android SDK.
-      # Avoid setup-android@v3: its legacy 'sdkmanager tools' request fails.
-
-      - name: Install Capacitor
+      - name: Install dependencies
         run: npm install --no-audit --no-fund
 
-      - name: Generate app icon
-        run: python3 scripts/make_icon.py
+      - name: Bundle offline-capable cloud integration
+        run: npm run build:cloud
 
-      - name: Create native Android project
+      - name: Create Android app and icons
         run: |
+          python3 scripts/make_icon.py
           npx cap add android
           npx cap sync android
+          npx capacitor-assets generate --android || true
 
-      - name: Apply app icon to Android
-        continue-on-error: true
-        run: npx capacitor-assets generate --android
+      - name: Use a permanent application ID and increasing version number
+        run: |
+          python3 scripts/set_version.py android/app/build.gradle "${{ github.run_number }}" "${{ github.ref_name }}"
 
-      - name: Compile and sign installable debug APK
+      - name: Build release APK (unsigned until the signing key is set up)
         run: |
           chmod +x android/gradlew
-          cd android
-          ./gradlew assembleDebug --no-daemon
+          cd android && ./gradlew assembleRelease --no-daemon
 
-      - name: Upload APK
+      - name: Prepare unsigned APK for one-time offline signing
+        run: |
+          mkdir -p output/tools
+          cp android/app/build/outputs/apk/release/app-release-unsigned.apk output/Nikolas-Kitchen-unsigned.apk
+          SDK_BUILD_TOOLS="$(find "${ANDROID_HOME:-/usr/local/lib/android/sdk}/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
+          cp "$SDK_BUILD_TOOLS/lib/apksigner.jar" output/tools/apksigner.jar
+          cp "$SDK_BUILD_TOOLS/zipalign" output/tools/zipalign
+
+      - name: Build future signed APK using retained encrypted signing key
+        if: ${{ env.NK_SIGNING_PASSWORD != '' }}
+        env:
+          NK_SIGNING_PASSWORD: ${{ secrets.NK_SIGNING_PASSWORD }}
+        run: |
+          if [ -f release-key/nikolas-release.jks.enc.b64 ]; then
+            openssl enc -aes-256-cbc -d -pbkdf2 -iter 250000 \
+              -in <(base64 -d release-key/nikolas-release.jks.enc.b64) \
+              -out release.jks -pass env:NK_SIGNING_PASSWORD
+            mkdir -p signed
+            output/tools/zipalign -f -p 4 output/Nikolas-Kitchen-unsigned.apk signed/aligned.apk
+            java -jar output/tools/apksigner.jar sign \
+              --ks release.jks --ks-key-alias nikolas-kitchen \
+              --ks-pass env:NK_SIGNING_PASSWORD --key-pass env:NK_SIGNING_PASSWORD \
+              --out signed/Nikolas-Kitchen.apk signed/aligned.apk
+            java -jar output/tools/apksigner.jar verify --verbose signed/Nikolas-Kitchen.apk
+            rm -f release.jks signed/aligned.apk
+          fi
+
+      - name: Upload installable signed APK (when signing has been configured)
+        if: ${{ env.NK_SIGNING_PASSWORD != '' }}
+        env:
+          NK_SIGNING_PASSWORD: ${{ secrets.NK_SIGNING_PASSWORD }}
         uses: actions/upload-artifact@v4
         with:
-          name: Nikolas-Kitchen-APK
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          name: Nikolas-Kitchen-signed-update
+          path: signed/Nikolas-Kitchen.apk
+          if-no-files-found: ignore
+
+      - name: Upload signing toolkit for first installation
+        uses: actions/upload-artifact@v4
+        with:
+          name: Nikolas-Kitchen-signing-toolkit
+          path: output/
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 7
+
+      - name: Publish signed Android release for in-app updates
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -f signed/Nikolas-Kitchen.apk ]; then
+            gh release create "${GITHUB_REF_NAME}" signed/Nikolas-Kitchen.apk \
+              --title "Nikola's Kitchen ${GITHUB_REF_NAME}" --notes "Android update; preserves data from earlier versions signed with the same key." \
+              || gh release upload "${GITHUB_REF_NAME}" signed/Nikolas-Kitchen.apk --clobber
+          else
+            echo "Release skipped: configure NK_SIGNING_PASSWORD first."
+          fi
