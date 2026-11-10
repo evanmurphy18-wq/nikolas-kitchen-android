@@ -1,8 +1,8 @@
-// Nikola's Kitchen: optional shared shopping list. Private data is stored in Cloud Firestore.
+// Nikola's Kitchen: opt-in household shopping and food inventory sync. Cloud data is private.
 // Firebase config is a public project identifier, NOT a password or private key.
 import {initializeApp} from 'firebase/app';
 import {getAuth, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut} from 'firebase/auth';
-import {initializeFirestore, persistentLocalCache, persistentSingleTabManager, getFirestore, doc, getDoc, setDoc, deleteDoc, collection, onSnapshot, serverTimestamp} from 'firebase/firestore';
+import {initializeFirestore, persistentLocalCache, persistentSingleTabManager, getFirestore, doc, getDoc, setDoc, deleteDoc, collection, onSnapshot, serverTimestamp, writeBatch, increment} from 'firebase/firestore';
 
 (function(){
   'use strict';
@@ -11,6 +11,11 @@ import {initializeFirestore, persistentLocalCache, persistentSingleTabManager, g
   const cfg=window.NK_CLOUD_CONFIG;
   let auth=null, db=null, user=null, household=null, unsubList=null, unsubUser=null, flushing=false, status='Local only', loading=false, firebaseApp=null;
   let localShoppingSnapshot=null;
+  let inventoryAvailable=false, inventoryEnabled=false, inventoryLoaded=false;
+  let unsubInventorySettings=null, unsubInventory=null;
+  const inventoryKey=()=>PREFIX+'inventory-enabled:'+(user?.uid||'')+':'+(household?.id||'');
+  const inventoryRef=id=>doc(db,'households',household.id,'inventory',id);
+  const validInventoryId=id=>typeof id==='string'&&/^[A-Za-z0-9_-]{1,140}$/.test(id);
   const text=s=>String(s??'');
   const escape=s=>text(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const escapeAttr=escape;
@@ -37,7 +42,8 @@ import {initializeFirestore, persistentLocalCache, persistentSingleTabManager, g
     if(!household)return '☁️ Signed in · Choose a household';
     if(!navigator.onLine)return '☁️ Offline · Changes will sync on reconnect';
     const count=readQueue().length;
-    return count?`☁️ Shared with household · ${count} change${count===1?'':'s'} pending`:'☁️ Shared household · Live updates on';
+    if(count)return `☁️ Shared household · ${count} shopping change${count===1?'':'s'} pending`;
+    return inventoryEnabled?(inventoryLoaded?'☁️ Shopping + food stock · Live sync':'☁️ Connecting shared food stock…'):'☁️ Shared shopping · Live updates on';
   }
   function isSharing(){return ready();}
   function setLocalShopping(newItems){
@@ -60,7 +66,16 @@ import {initializeFirestore, persistentLocalCache, persistentSingleTabManager, g
     localShoppingSnapshot=window.NKHost.getShopping();
     localStorage.setItem(PREFIX+'local-shopping',JSON.stringify(localShoppingSnapshot));
   }
-  function stopWatching(){if(unsubList){unsubList();unsubList=null;}if(unsubUser){unsubUser();unsubUser=null;}}
+  function stopInventory(){
+    if(unsubInventory){unsubInventory();unsubInventory=null;}
+    if(unsubInventorySettings){unsubInventorySettings();unsubInventorySettings=null;}
+    inventoryAvailable=false;inventoryEnabled=false;inventoryLoaded=false;
+  }
+  function stopWatching(){
+    if(unsubList){unsubList();unsubList=null;}
+    if(unsubUser){unsubUser();unsubUser=null;}
+    stopInventory();
+  }
   function leaveSharedView(){stopWatching();household=null;try{const s=JSON.parse(localStorage.getItem(PREFIX+'local-shopping')||'[]');setLocalShopping(s)}catch(_){setLocalShopping([])}updateStatus();}
   async function watchHousehold(id){
     stopWatching();household={id};backupPersonalList();
@@ -69,6 +84,7 @@ import {initializeFirestore, persistentLocalCache, persistentSingleTabManager, g
       const shared=await getDoc(doc(db,'households',id));
       if(!shared.exists())throw Error('Household not found');
       household={id,...shared.data()};
+      watchInventorySetup();
       unsubList=onSnapshot(collection(db,'households',id,'shopping'),snap=>{
         const remote=snap.docs.map(d=>({id:d.id,text:d.data().text||'',done:Boolean(d.data().done)}));
         setLocalShopping(blend(remote));
@@ -78,6 +94,114 @@ import {initializeFirestore, persistentLocalCache, persistentSingleTabManager, g
     }catch(e){message(err(e));household=null;}
     updateStatus();
   }
+
+  // Each inventory item is stored separately; other foods can be updated
+  // independently, while quantity adjustments use atomic increments.
+  function inventoryEntries(snapshot){
+    const docs=new Map();
+    const custom=new Map((snapshot.custom||[]).filter(i=>validInventoryId(i?.id)).map(i=>[i.id,i]));
+    const meta=snapshot.meta||{};
+    const stock=snapshot.stock||{};
+    for(const id of new Set([...Object.keys(stock),...custom.keys(),...Object.keys(meta)])){
+      if(!validInventoryId(id))continue;
+      const qty=Number(stock[id]??custom.get(id)?.qty??0);
+      if(!Number.isFinite(qty)||qty<0||qty>100000)continue;
+      const value={qty};
+      if(custom.has(id))value.custom=custom.get(id);
+      if(meta[id]&&typeof meta[id]==='object'&&!Array.isArray(meta[id]))value.meta=meta[id];
+      docs.set(id,value);
+    }
+    return docs;
+  }
+  function watchInventorySetup(){
+    if(!ready())return;
+    const ref=doc(db,'households',household.id,'settings','inventory');
+    unsubInventorySettings=onSnapshot(ref,snap=>{
+      inventoryAvailable=Boolean(snap.exists()&&snap.data()?.enabled);
+      if(inventoryAvailable&&localStorage.getItem(inventoryKey())==='yes')startInventory();
+      updateStatus();
+    },e=>message(err(e)));
+  }
+  function startInventory(){
+    if(!ready()||unsubInventory||!inventoryAvailable)return;
+    inventoryEnabled=true;inventoryLoaded=false;updateStatus();
+    const hid=household.id;
+    unsubInventory=onSnapshot(collection(db,'households',hid,'inventory'),{includeMetadataChanges:true},snap=>{
+      if(!inventoryLoaded&&snap.metadata.fromCache)return;
+      inventoryLoaded=true;
+      const stock={}, custom=[], meta={};
+      for(const entry of snap.docs){
+        const d=entry.data(),id=entry.id;
+        if(!validInventoryId(id)||typeof d.qty!=='number'||!Number.isFinite(d.qty)||d.qty<0||d.qty>100000)continue;
+        stock[id]=d.qty;
+        if(d.custom&&typeof d.custom==='object'&&d.custom.id===id)custom.push(d.custom);
+        if(d.meta&&typeof d.meta==='object')meta[id]=d.meta;
+      }
+      window.NKHost?.setInventory({stock,custom,meta});
+      updateStatus();
+    },e=>message(err(e)));
+  }
+  function inventoryChanged(before,after){
+    if(!ready()||!inventoryEnabled)return;
+    const previous=inventoryEntries(before),current=inventoryEntries(after);
+    for(const [id,oldData] of previous){
+      if(!current.has(id)&&id.startsWith('custom_'))deleteDoc(inventoryRef(id)).catch(e=>message(err(e)));
+    }
+    for(const [id,data] of current){
+      const old=previous.get(id);
+      if(JSON.stringify(old)===JSON.stringify(data))continue;
+      const payload={updatedBy:user.uid,updatedAt:serverTimestamp()};
+      if(!old){
+        Object.assign(payload,data);
+      }else{
+        const delta=Number((data.qty-old.qty).toFixed(4));
+        if(delta!==0)payload.qty=increment(delta);
+        if(JSON.stringify(data.custom||null)!==JSON.stringify(old.custom||null))payload.custom=data.custom||null;
+        if(JSON.stringify(data.meta||null)!==JSON.stringify(old.meta||null))payload.meta=data.meta||null;
+      }
+      setDoc(inventoryRef(id),payload,{merge:true}).catch(e=>message(err(e)));
+    }
+  }
+  async function publishInventory(){
+    if(!ready()||household.ownerUid!==user.uid||inventoryAvailable)return;
+    if(!confirm('Use THIS phone as the starting freezer, fridge and pantry for your household? Finish imports and export a backup first. This uploads your current quantities and food details.'))return;
+    try{
+      const config=doc(db,'households',household.id,'settings','inventory');
+      if((await getDoc(config)).exists()){window.toast('Shared inventory already exists. Reopen household settings.');return;}
+      const entries=Array.from(inventoryEntries(window.NKHost.getInventory()));
+      for(let i=0;i<entries.length;i+=300){
+        const batch=writeBatch(db);
+        for(const [id,data] of entries.slice(i,i+300)){
+          batch.set(inventoryRef(id),{...data,updatedBy:user.uid,updatedAt:serverTimestamp()});
+        }
+        await batch.commit();
+      }
+      await setDoc(config,{enabled:true,ownerUid:user.uid,startedAt:serverTimestamp()});
+      inventoryAvailable=true;
+      localStorage.setItem(inventoryKey(),'yes');
+      startInventory();
+      window.toast('Freezer, fridge and pantry are ready to share ✓');
+      open();
+    }catch(e){window.toast(err(e));}
+  }
+  function joinInventory(){
+    if(!ready()||!inventoryAvailable||inventoryEnabled)return;
+    if(!confirm('Replace the freezer, fridge and pantry on THIS phone with your household inventory? Export a backup first if this phone has food you need to keep.'))return;
+    localStorage.setItem(inventoryKey(),'yes');
+    startInventory();
+    window.toast('Connecting to household food inventory ✓');
+    open();
+  }
+  function pauseInventory(){
+    if(!inventoryEnabled)return;
+    if(!confirm('Stop syncing this phone’s freezer, fridge and pantry? Your current local food remains, but edits here will no longer update the other phone.'))return;
+    localStorage.removeItem(inventoryKey());
+    if(unsubInventory){unsubInventory();unsubInventory=null;}
+    inventoryEnabled=false;inventoryLoaded=false;
+    window.toast('Food stock sync paused on this phone');
+    open();
+  }
+
   async function handleAuth(next){
     if(!next){user=null;leaveSharedView();message('Signed out');return;}
     user=next;message('Signed in');
