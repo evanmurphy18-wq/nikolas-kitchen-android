@@ -1,0 +1,54 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn(){ return request.auth != null; }
+    function member(hid){
+      return signedIn() && exists(/databases/$(database)/documents/households/$(hid)/members/$(request.auth.uid));
+    }
+    match /users/{uid} {
+      allow get: if signedIn() && request.auth.uid == uid;
+      allow list: if false;
+      allow create, update: if signedIn() && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['householdId','updatedAt'])
+        && request.resource.data.householdId is string;
+      allow delete: if signedIn() && request.auth.uid == uid;
+    }
+    match /households/{hid} {
+      allow get: if signedIn() && (resource.data.ownerUid == request.auth.uid || member(hid));
+      allow list: if false;
+      allow create: if signedIn()
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.keys().hasOnly(['ownerUid','name','inviteKey','createdAt'])
+        && request.resource.data.name is string
+        && request.resource.data.name.size() <= 60
+        && request.resource.data.inviteKey is string
+        && request.resource.data.inviteKey.size() == 40;
+      allow update, delete: if false;
+      match /members/{uid} {
+        allow get, list: if member(hid);
+        allow create: if signedIn() && request.auth.uid == uid
+          && request.resource.data.keys().hasOnly(['joinKey','email','joinedAt'])
+          && request.resource.data.joinKey is string
+          && (get(/databases/$(database)/documents/households/$(hid)).data.ownerUid == uid
+            || request.resource.data.joinKey == get(/databases/$(database)/documents/households/$(hid)).data.inviteKey);
+        allow update, delete: if false;
+      }
+      match /shopping/{itemId} {
+        allow read: if member(hid);
+        allow create: if member(hid)
+          && request.resource.data.keys().hasOnly(['text','done','updatedBy','updatedAt'])
+          && request.resource.data.text is string
+          && request.resource.data.text.size() <= 120
+          && request.resource.data.done is bool
+          && request.resource.data.updatedBy == request.auth.uid;
+        allow update: if member(hid)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['text','done','updatedBy','updatedAt'])
+          && request.resource.data.text is string
+          && request.resource.data.text.size() <= 120
+          && request.resource.data.done is bool
+          && request.resource.data.updatedBy == request.auth.uid;
+        allow delete: if member(hid);
+      }
+    }
+  }
+}
