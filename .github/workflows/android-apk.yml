@@ -96,14 +96,21 @@ jobs:
           retention-days: 7
 
       - name: Publish signed Android release for in-app updates
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: ${{ env.NK_SIGNING_PASSWORD != '' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           if [ -f signed/Nikolas-Kitchen.apk ]; then
-            gh release create "${GITHUB_REF_NAME}" signed/Nikolas-Kitchen.apk \
-              --title "Nikola's Kitchen ${GITHUB_REF_NAME}" --notes "Android update; preserves data from earlier versions signed with the same key." \
-              || gh release upload "${GITHUB_REF_NAME}" signed/Nikolas-Kitchen.apk --clobber
+            TAG="v$(node -p "require('./package.json').version")"
+            if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then TAG="${GITHUB_REF_NAME}"; fi
+            if gh release view "${TAG}" >/dev/null 2>&1; then
+              gh release upload "${TAG}" signed/Nikolas-Kitchen.apk --clobber
+            else
+              gh release create "${TAG}" signed/Nikolas-Kitchen.apk \
+                --target "${GITHUB_SHA}" \
+                --title "Nikola's Kitchen ${TAG}" \
+                --notes "Cloud-enabled shared shopping list. Installs over v4 and preserves local data when signed with the permanent key."
+            fi
           else
             echo "Release skipped: configure NK_SIGNING_PASSWORD first."
           fi
