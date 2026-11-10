@@ -31,3 +31,5 @@ To release an update: change the version in `package.json`, commit your changes,
 - Both shopping data and inventory can be exported in the app's JSON backup. Treat exported backups as private.
 - Cloud functionality requires a configured Firebase project and has not been end-to-end tested with two real accounts until one is provided.
 - GitHub CI compiles the app. The CI-provided signing toolkit permits a private, stable first-time signature without exposing the key.
+
+_Update signing: GitHub Actions verification requested after configuring the release password._
