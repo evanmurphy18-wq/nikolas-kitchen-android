@@ -1,8 +1,8 @@
-# Nikola's Kitchen — long-term Android app (v4)
+# Nikola's Kitchen — long-term Android app (v4.2)
 
-A single app with a freezer, fridge and pantry inventory, food icons and custom units, 68 recipes, meal planning, local backups, and an **opt-in cloud shopping list shared between two phones**.
+A single app with a freezer, fridge and pantry inventory, food icons and custom units, 68 recipes, meal planning, local backups, and **opt-in household cloud sharing for shopping lists and the freezer, fridge and pantry**, across two phones.
 
-## Shared shopping — one-time Firebase setup
+## Household cloud sharing — one-time Firebase setup
 
 The app works offline immediately. Cloud sharing **will not work until a Firebase project is configured**; the source ships with `www/cloud-config.js` containing `null` deliberately.
 
@@ -12,7 +12,11 @@ The app works offline immediately. Cloud sharing **will not work until a Firebas
 4. Change `www/cloud-config.js` from `null` to `window.NK_CLOUD_CONFIG = { apiKey: "...", authDomain: "...", projectId: "...", appId: "..." };` and commit it.
 5. Build another APK (or use the signed update mechanism below). On both phones, open **Settings → Shared household**. The first user creates a household, copies the invitation code, and the second user signs in and joins using the code. Accounts use different emails.
 
-Only the shopping list is shared. Pantry inventory, recipes, favourites and other personal data still live on each phone. Each account must keep its password private. The invite code permits joining; share it privately.
+The shopping list is shared after signing in. **Food inventory sharing is separate and opt-in**: after completing your imports, export a backup on your primary phone, then go to **Shared household → Share this phone's freezer, fridge and pantry**. This seeds one canonical household inventory. On the second phone, export a backup before selecting **Use shared freezer, fridge and pantry on this phone**, because that replaces its local food quantities and custom items. After both phones opt in, quantities, item additions/deletions, food names, units, dates and locations sync automatically; quantity adjustments are atomic to avoid overwriting simultaneous changes. **Recipes, favourites, weekly plans and recipe history stay personal**. When food stock is paused on one phone, that phone's inventory becomes local until re-enabled.
+
+**Upgrade from v4.1 to v4.2 requires republishing Firestore Rules:** open your Firebase project → Firestore → Rules, replace the rules with the latest contents of [cloud/firestore.rules](cloud/firestore.rules) and tap Publish. The existing v4.1 rules do not permit inventory writes. Do not enable public allow-all rules.
+
+Keep each account password private. The invite code permits joining; share it privately.
 
 ## APK updates — permanent signing identity
 
@@ -29,7 +33,7 @@ To release an update: change the version in `package.json`, commit your changes,
 - Firestore enforces membership-only list access with email/password authentication. An unguessable invitation code allows a second account to join.
 - Each device keeps a local copy and a durable pending-operations queue to send when reconnected.
 - Both shopping data and inventory can be exported in the app's JSON backup. Treat exported backups as private.
-- Cloud functionality requires a configured Firebase project and has not been end-to-end tested with two real accounts until one is provided.
+- Cloud functionality requires a configured Firebase project and appropriate rules. End-to-end syncing must still be tested on both household phones.
 - GitHub CI compiles the app. The CI-provided signing toolkit permits a private, stable first-time signature without exposing the key.
 
 _Update signing: GitHub Actions verification requested after configuring the release password._
