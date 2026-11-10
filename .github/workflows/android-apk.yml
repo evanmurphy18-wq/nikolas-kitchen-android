@@ -64,6 +64,9 @@ jobs:
             openssl enc -aes-256-cbc -d -pbkdf2 -iter 250000 \
               -in <(base64 -d release-key/nikolas-release.jks.enc.b64) \
               -out release.jks -pass env:NK_SIGNING_PASSWORD
+            # Android's zipalign requires libc++ on the GitHub Ubuntu runner.
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq libc++1
             mkdir -p signed
             output/tools/zipalign -f -p 4 output/Nikolas-Kitchen-unsigned.apk signed/aligned.apk
             java -jar output/tools/apksigner.jar sign \
